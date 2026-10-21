@@ -1,0 +1,369 @@
+@startuml Restaurant_Class_Diagram
+'====================================================================
+' Restaurant Management Game - FINAL (Stage 3) class diagram
+' Layered: boundary / control / domain
+'====================================================================
+skinparam classAttributeIconSize 0
+skinparam nodesep 18
+skinparam ranksep 26
+skinparam packageStyle rectangle
+hide empty members
+
+'--------------------------------------------------------------------
+package "boundary" <<Frame>> {
+  interface GameUI <<interface>> {
+    + showStartOfTurn(state : RestaurantState)
+    + showTurnResult(summary : TurnSummary)
+    + chooseWaiterTask(customerIds, orderIds) : WaiterCommand
+    + chooseChefTask(orderIds) : ChefCommand
+    + askActivateHappyHour() : boolean
+    + showError(message : String)
+    + showMessage(message : String)
+  }
+  class ConsoleUI {
+    - in : Scanner
+    - out : PrintStream
+    + ConsoleUI(in, out)
+    + showStartOfTurn(state : RestaurantState)
+    + showTurnResult(summary : TurnSummary)
+    + chooseWaiterTask(customerIds, orderIds) : WaiterCommand
+    + chooseChefTask(orderIds) : ChefCommand
+    + askActivateHappyHour() : boolean
+    + showError(message : String)
+    + showMessage(message : String)
+    - readInt(prompt) : int
+    - readLine(prompt) : String
+  }
+}
+
+'--------------------------------------------------------------------
+package "control" <<Frame>> {
+  class GameController {
+    - restaurant : Restaurant
+    - ui : GameUI
+    - schedule : ArrivalSchedule
+    - rng : Random
+    + GameController(restaurant, ui, schedule, rng)
+    + run() : GameResult
+    - startTurn()
+    - stepArrivals()
+    - stepManagerChoices()
+    - stepKitchenAndServing()
+    - stepEatingAndPayment()
+    - stepWaitingAndAbandonment()
+    - endTurn() : boolean   ' returns true when game over
+    - checkObjective() : ObjectiveReport
+  }
+  class ArrivalSchedule {
+    - arrivals : Map<Integer, Supplier<Customer>>
+    + ArrivalSchedule(seed : long)
+    + customersFor(turn : int) : List<Customer>
+  }
+  class CustomerFactory {
+    + create(type : CustomerType, id : int, rng : Random) : Customer {static}
+  }
+  class TurnSummary {
+    + turnNo : int
+    + servedCount : int
+    + unhappyDepartures : int
+    + revenueCents : int
+    + avgPaidSatisfaction : OptionalDouble
+    + turnsUsed : int
+  }
+  class GameResult {
+    + outcome : Outcome
+    + summary : TurnSummary
+  }
+}
+
+'--------------------------------------------------------------------
+package "domain - customer" <<Frame>> {
+  abstract class Customer {
+    - id : int
+    - name : String
+    - satisfaction : int
+    - state : CustomerState
+    - arrivalTurn : int
+    + Customer(id, name, arrivalTurn)
+    + {abstract} chooseItem(menu : Menu) : MenuItem
+    + {abstract} #satisfactionLossPerTurn() : int
+    + {abstract} #discountRate() : double
+    + loseSatisfaction() : boolean
+    + sitAt(table : Table)
+    + assignOrder(order : Order)
+    + getId() : int
+    + getName() : String
+    + getSatisfaction() : int
+    + getState() : CustomerState
+    + setState(s : CustomerState)
+    + getOrder() : Order
+    + getTable() : Table
+    - clamp() : void
+  }
+  class RegularCustomer {
+    + chooseItem(menu : Menu) : MenuItem
+    + #satisfactionLossPerTurn() : int      ' 8
+    + #discountRate() : double              ' 0.0
+  }
+  class VIPCustomer {
+    + chooseItem(menu : Menu) : MenuItem
+    + #satisfactionLossPerTurn() : int      ' 5
+    + #discountRate() : double              ' 0.10
+  }
+  class CriticCustomer {
+    - slowServiceTurns : int
+    + chooseItem(menu : Menu) : MenuItem    ' prefers premium / combo
+    + #satisfactionLossPerTurn() : int      ' 12
+    + #discountRate() : double              ' 0.0
+    + reactToService(order : Order) : int   ' documented reaction
+  }
+}
+
+'--------------------------------------------------------------------
+package "domain - order & menu" <<Frame>> {
+  class Order {
+    - id : int
+    - status : OrderStatus
+    - unitsDone : int
+    - lockedPriceCents : int
+    + Order(id, customer : Customer, item : MenuItem, lockedPriceCents)
+    + advance()
+    + markServed()
+    + markPaid()
+    + cancel()
+    + isReady() : boolean
+    + billCents() : int
+    + remainingUnits() : int
+    + getStatus() : OrderStatus
+    + getItem() : MenuItem
+    + getCustomer() : Customer
+  }
+  class Menu {
+    - items : List<MenuItem>
+    + Menu(items)
+    + all() : List<MenuItem>
+    + find(name : String) : MenuItem
+    + add(item : MenuItem)
+  }
+  class MenuItem {
+    - name : String
+    - priceCents : int
+    - prepUnits : int
+    + MenuItem(name, priceCents, prepUnits)
+    + getName() : String
+    + getPriceCents() : int
+    + getPrepUnits() : int
+    + describe() : String
+  }
+  class ComboMeal {
+    - partA : MenuItem
+    - partB : MenuItem
+    + ComboMeal(partA, partB)
+    + getPriceCents() : int      ' 90% of sum, rounded
+    + getPrepUnits() : int       ' sum
+    + getParts() : List<MenuItem>
+  }
+}
+
+'--------------------------------------------------------------------
+package "domain - staff" <<Frame>> {
+  abstract class Staff {
+    - name : String
+    - actedThisTurn : boolean
+    + Staff(name)
+    + getName() : String
+    + canAct() : boolean
+    + markActed()
+    + beginTurn()
+  }
+  class Waiter {
+    + seat(customer : Customer, table : Table) : boolean
+    + takeOrder(customer : Customer, pricePolicy : PricingPolicy) : Order
+    + serve(order : Order) : boolean
+  }
+  class Chef {
+    + advance(order : Order) : boolean
+  }
+  class Cashier {
+    + collectPayment(customer : Customer) : int
+  }
+  class Host {
+    + seat(customer : Customer, table : Table) : boolean
+  }
+}
+
+'--------------------------------------------------------------------
+package "domain - pricing (Strategy / Decorator)" <<Frame>> {
+  interface PricingPolicy <<interface>> {
+    + billCents(customer : Customer, item : MenuItem, happyHour : boolean) : int
+  }
+  class StandardPricing {
+    + billCents(customer, item, happyHour) : int
+  }
+  class HappyHourPricing {
+    - inner : PricingPolicy
+    - discountPct : int          ' 20
+    + HappyHourPricing(inner)
+    + billCents(customer, item, happyHour) : int
+  }
+}
+
+'--------------------------------------------------------------------
+package "domain - world state" <<Frame>> {
+  class Restaurant {
+    - turn : int
+    - revenueCents : int
+    - tables : List<Table>
+    - waiting : WaitingQueue
+    - active : List<Customer>
+    - staff : List<Staff>
+    - menu : Menu
+    - pricePolicy : PricingPolicy
+    - happyHour : HappyHour
+    - servedCount : int
+    - unhappyDepartures : int
+    - paidSatisfactionSum : int
+    - paidCount : int
+    + getTurn() : int
+    + advanceTurn()
+    + getRevenueCents() : int
+    + addRevenue(cents : int)
+    + averagePaidSatisfaction() : OptionalDouble
+    + getWaiting() : WaitingQueue
+    + getTables() : List<Table>
+    + getActive() : List<Customer>
+    + getMenu() : Menu
+    + getPricePolicy() : PricingPolicy
+    + getHappyHour() : HappyHour
+    + recordPaid(customer : Customer)
+    + recordUnhappyExit()
+    + freeTableFor(customer : Customer) : Table
+    + freeTable() : Table
+  }
+  class WaitingQueue {
+    - q : Deque<Customer>
+    + enqueue(c : Customer)
+    + remove(c : Customer) : boolean
+    + peek() : Customer
+    + isEmpty() : boolean
+    + size() : int
+    + asList() : List<Customer>
+  }
+  class Table {
+    - id : int
+    - occupant : Customer
+    + Table(id)
+    + isFree() : boolean
+    + seat(c : Customer)
+    + vacate()
+    + getOccupant() : Customer
+    + getId() : int
+  }
+  class HappyHour {
+    - turnsRemaining : int
+    - used : boolean
+    + activate()
+    + tick()
+    + isActive() : boolean
+    + isUsed() : boolean
+    + remaining() : int
+  }
+}
+
+'--------------------------------------------------------------------
+package "domain - shared value objects & enums" <<Frame>> {
+  class Money {
+    + {static} format(cents : int) : String
+    + {static} round90(cents : int) : int
+    + {static} withPercentOff(cents, pct) : int
+  }
+  enum CustomerType {
+    REGULAR
+    VIP
+    CRITIC
+  }
+  enum CustomerState {
+    WAITING
+    SEATED
+    EATING
+    READY_TO_PAY
+    PAID
+    LEFT
+  }
+  enum OrderStatus {
+    PENDING
+    READY
+    SERVED
+    PAID
+    CANCELLED
+  }
+  enum WaiterAction {
+    SEAT
+    TAKE_ORDER
+    SERVE
+    WAIT
+  }
+  enum ChefAction {
+    ADVANCE
+    WAIT
+  }
+  enum Outcome {
+    VICTORY
+    DEFEAT
+  }
+  class WaiterCommand {
+    + action : WaiterAction
+    + targetId : int
+  }
+  class ChefCommand {
+    + action : ChefAction
+    + orderId : int
+  }
+}
+
+'====================================================================
+' RELATIONSHIPS
+'====================================================================
+' Inheritance (generalisation) - polymorphism points
+Customer <|-- RegularCustomer
+Customer <|-- VIPCustomer
+Customer <|-- CriticCustomer
+MenuItem <|-- ComboMeal
+Staff <|-- Waiter
+Staff <|-- Chef
+Staff <|-- Cashier
+Staff <|-- Host
+GameUI <|.. ConsoleUI
+PricingPolicy <|.. StandardPricing
+PricingPolicy <|.. HappyHourPricing
+
+' Composition / aggregation - domain ownership
+Restaurant "1" *-- "2" Table : owns >
+Restaurant "1" *-- "1" WaitingQueue : owns >
+Restaurant "1" o-- "0..*" Customer : tracks >
+Restaurant "1" *-- "1" Menu : owns >
+Restaurant "1" *-- "4" Staff : employs >
+Restaurant "1" *-- "1" HappyHour : has >
+Restaurant "1" o-- "1" PricingPolicy : uses >
+ComboMeal "1" *-- "2" MenuItem : composed of >
+Customer "1" o-- "0..1" Order : places >
+Customer "1" o-- "0..1" Table : occupies >
+Table "1" o-- "0..1" Customer : seated >
+Order "1" --> "1" MenuItem : orders >
+Menu "1" o-- "0..*" MenuItem : contains >
+HappyHourPricing "1" o-- "1" PricingPolicy : wraps >
+
+' Control / boundary wiring
+GameController "1" --> "1" Restaurant : drives >
+GameController "1" --> "1" GameUI : talks to >
+GameController "1" --> "1" ArrivalSchedule : pulls arrivals >
+GameController ..> CustomerFactory : uses >
+GameController ..> WaiterCommand : dispatches >
+GameController ..> ChefCommand : dispatches >
+ArrivalSchedule ..> CustomerFactory : uses >
+Waiter --> Restaurant : reads tables/queue
+Chef --> Order
+Cashier --> Restaurant
+Host --> Restaurant
+
+@enduml
